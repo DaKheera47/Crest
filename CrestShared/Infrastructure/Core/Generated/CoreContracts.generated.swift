@@ -1781,6 +1781,11 @@ struct ColorPalette: Equatable, Sendable {
     var colors: [BrandColor]
 }
 
+struct CommitRecentTabSwitch: Intent, WindowIntent, Equatable, Sendable {
+    let source: RecentTabList
+    let tabID: UUID
+}
+
 struct ConfigureCloudSync: Intent, CloudSyncControlIntent, Equatable, Sendable {
     let isEnabled: Bool
     let canReachCloud: Bool
@@ -4893,6 +4898,20 @@ struct ReadPageNetwork: PageRequest, Equatable, Sendable {
 struct ReassignShortcut: Intent, ShortcutIntent, Equatable, Sendable {
     let command: ShortcutCommand
     let keys: KeyCombination
+}
+
+struct RecentTabCandidates: Query, Equatable, Sendable {
+    typealias Answer = RecentTabList
+
+    let windowID: UUID
+}
+
+struct RecentTabList: Equatable, Sendable {
+    var windowID: UUID
+    var spaceID: UUID
+    var profileID: UUID
+    var shownTabID: UUID?
+    var tabIDs: [UUID]
 }
 
 struct RecordCloudFields: Intent, CloudTransportIntent, Equatable, Sendable {

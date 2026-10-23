@@ -7,6 +7,7 @@ final class BrowserChromeState {
     // MARK: - Variables
 
     let utilityPresentation: BrowserUtilityPresentationState
+    let tabSwitcher = BrowserTabSwitcherModel()
     var columnVisibility: NavigationSplitViewVisibility {
         get { observed(\.columnVisibilityStorage, as: \.columnVisibility) }
         set { publish(newValue, into: \.columnVisibilityStorage, as: \.columnVisibility) }

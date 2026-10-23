@@ -2,6 +2,10 @@ namespace CrestCore.Contracts;
 
 #region Queries
 
+/// A window's recent tabs, current first, captured before a switching gesture.
+/// An unavailable or locked Space offers no candidates.
+public sealed record RecentTabList(Guid WindowId, Guid SpaceId, Guid ProfileId, Guid? ShownTabId, IReadOnlyList<Guid> TabIds);
+
 /// Whether a dragged tab may leave its window, and when it may not, why.
 public sealed record TearOffPermission(bool Allowed, TearOffRefusal? Reason);
 

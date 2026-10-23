@@ -4353,6 +4353,10 @@
     "space-icon-size-setting": {
       "category": "new",
       "message": "The Space icons at the bottom of the sidebar shrink so more Spaces fit without scrolling. To keep one size instead, turn off Fit Space icons to sidebar in Appearance settings and choose it with the slider."
+    },
+    "recent-tab-switcher": {
+      "category": "new",
+      "message": "Hold Control and press Tab to browse recent tabs in your Space, use Shift to reverse, and release Control to switch."
     }
   }
 }

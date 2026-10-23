@@ -37,6 +37,7 @@ struct BrowserRootShell: View, BrowserChromeAnimating {
                     .allowsHitTesting(!model.chrome.isCommandPalettePresented)
                     .accessibilityHidden(model.chrome.isCommandPalettePresented)
             }
+            .accessibilityHidden(model.chrome.tabSwitcher.isPresented)
 
             // Window focus gates the edge reveal in the shell and over a page
             // in full screen alike, so it is followed whichever shows.
@@ -76,6 +77,14 @@ struct BrowserRootShell: View, BrowserChromeAnimating {
                 )
             }
         }
+        .overlay {
+            if model.chrome.tabSwitcher.isPresented {
+                BrowserTabSwitcher(model: model.chrome.tabSwitcher, browser: model.browser)
+            }
+        }
+        .onChange(of: model.chrome.tabSwitcher.isPresented) { _, isPresented in
+            if !isPresented { model.chrome.tabSwitcher.cancel() }
+        }
         // One per-window host answers for every row and tile in this shell,
         // so the sidebar reads it from here rather than being handed a value
         // per tab through the tree between them.
@@ -88,7 +97,8 @@ struct BrowserRootShell: View, BrowserChromeAnimating {
                 browserChromeOwnsFocus:
                     !model.isWindowFocused
                     || model.isAddressEditing
-                    || model.chrome.isCommandPalettePresented,
+                    || model.chrome.isCommandPalettePresented
+                    || model.chrome.tabSwitcher.isPresented,
                 pageChromeOwnsFocus: false
             )
         )

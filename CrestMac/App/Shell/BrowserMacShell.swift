@@ -43,6 +43,7 @@ final class BrowserMacShell {
     /// does, so this is where Crest's shortcuts go ahead of a page when the
     /// core reserves them from pages, and ahead of Crest's own views always.
     private var keyMonitor: Any?
+    var tabSwitcherSession: BrowserTabSwitcherKeyboardSession?
     /// Takes a mouse's Back and Forward clicks whole in every window, ahead of
     /// any view.
     private let mouseButtons = BrowserMacMouseButtons()
@@ -97,7 +98,7 @@ final class BrowserMacShell {
         let background = application.launchesInBackground
         windows.openLaunchWindows(activation: background ? .background : .key)
         menuBar.install()
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             let pageSeesFirst = BrowserWebHostView.isPageContent(NSApp.keyWindow?.firstResponder)
             return self?.handleShortcut(event, pageSeesFirst: pageSeesFirst) == true ? nil : event
         }

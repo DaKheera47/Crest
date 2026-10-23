@@ -9,6 +9,7 @@ struct CrestChromeButtonStyle: ButtonStyle {
         height: CrestLayout.minimumHitTarget
     )
     var cornerRadius = CrestLayout.sidebarControlCornerRadius
+    var isSelected = false
     /// Draws a fixed fill at rest, for a tile that stands on its own rather
     /// than a glyph that only shows a surface under the pointer. It is a fill
     /// rather than the device's material because these tiles sit inside
@@ -20,6 +21,7 @@ struct CrestChromeButtonStyle: ButtonStyle {
             .modifier(
                 CrestChromeButtonSurface(
                     isPressed: configuration.isPressed,
+                    isSelected: isSelected,
                     controlSize: controlSize,
                     cornerRadius: cornerRadius,
                     showsRestingFill: showsRestingFill
@@ -30,6 +32,7 @@ struct CrestChromeButtonStyle: ButtonStyle {
 
 private struct CrestChromeButtonSurface: ViewModifier {
     let isPressed: Bool
+    let isSelected: Bool
     let controlSize: CGSize?
     let cornerRadius: CGFloat
     let showsRestingFill: Bool
@@ -46,7 +49,7 @@ private struct CrestChromeButtonSurface: ViewModifier {
             .frame(width: controlSize?.width, height: controlSize?.height)
             .contentShape(.rect)
             .crestHoverSurface(
-                isSelected: false,
+                isSelected: isSelected,
                 cornerRadius: cornerRadius,
                 isPressed: isPressed
             )

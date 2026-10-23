@@ -121,6 +121,16 @@ final class BrowserStore {
         return true
     }
 
+    /// Commits a held switching gesture only while its captured source is current.
+    @discardableResult
+    func commitRecentTabSwitch(_ source: RecentTabList, to tabID: UUID) -> Bool {
+        guard source.windowID == windowID, sendWindowIntent(CommitRecentTabSwitch(source: source, tabID: tabID)),
+            shownTab?.id == tabID
+        else { return false }
+        windowRevision &+= 1
+        return true
+    }
+
     func clearPresentedTabSelection(in spaceID: UUID) {
         guard sendWindowIntent(ShowTab(windowID: windowID, spaceID: spaceID, tabID: nil)) else {
             return

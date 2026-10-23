@@ -35,6 +35,11 @@ extension BrowserMacShell {
     /// such as the location field or the sidebar, get every Crest shortcut
     /// before they see the key.
     func handleShortcut(_ event: NSEvent, pageSeesFirst: Bool) -> Bool {
+        if let session = tabSwitcherSession {
+            let handled = session.handle(event, keyWindow: NSApp.keyWindow)
+            if !session.isActive { tabSwitcherSession = nil }
+            if handled { return true }
+        }
         guard let windows, let application, event.type == .keyDown,
             NSApp.modalWindow == nil, NSApp.keyWindow?.attachedSheet == nil,
             (NSApp.keyWindow?.firstResponder as? ShortcutRecorderButton)?.isRecording != true,
@@ -54,6 +59,23 @@ extension BrowserMacShell {
         // browser workspace. Their editing and close shortcuts stay local.
         let context = windows.activeContext
         guard context != nil || windows.isQuickWindowKey else { return false }
+        if let context, let window = NSApp.keyWindow,
+            BrowserTabSwitcherKeyboardSession.begins(event, shortcuts: application.shortcuts),
+            canPerform(.mostRecentTab)
+        {
+            context.chrome.dismissCommandPalette()
+            let switcher = context.chrome.tabSwitcher
+            if switcher.begin(
+                in: context.browser, reversed: event.modifierFlags.contains(.shift),
+                didSelect: {
+                    [weak pages = context.pages] in pages?.select()
+                })
+            {
+                tabSwitcherSession = BrowserTabSwitcherKeyboardSession(
+                    model: switcher, window: window, shortcuts: application.shortcuts)
+            }
+            return true
+        }
         if let command = application.shortcuts.command(for: event, isEnabled: canPerform) {
             guard command.isReservedFromPages || !pageSeesFirst else { return false }
             perform(command)
