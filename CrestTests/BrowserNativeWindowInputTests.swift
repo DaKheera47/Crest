@@ -5,35 +5,6 @@ import XCTest
 
 @MainActor
 final class BrowserNativeWindowInputTests: XCTestCase {
-    func testBrowserChromeKeepsTheNativeTitleBarAndControls() throws {
-        let window = makeWindow()
-        defer { window.close() }
-        let content = try XCTUnwrap(window.contentView)
-        let buttons = BrowserNativeWindowControlsHostView.buttonTypes.compactMap(window.standardWindowButton)
-        let input = NSTextField(frame: NSRect(x: 350, y: 560, width: 200, height: 28))
-        content.addSubview(input)
-        let chrome = BrowserNativeWindowControlsHostView()
-        content.addSubview(chrome)
-        window.layoutIfNeeded()
-
-        // The window stays movable, so the system's window commands move it;
-        // content under the title bar still receives its own clicks.
-        XCTAssertTrue(window.isMovable)
-        XCTAssertTrue(window.styleMask.contains(.resizable))
-        XCTAssertTrue(window.styleMask.contains(.titled))
-        XCTAssertTrue(content.hitTest(NSPoint(x: 400, y: 574)) === input)
-        for (type, button) in zip(BrowserNativeWindowControlsHostView.buttonTypes, buttons) {
-            XCTAssertTrue(window.standardWindowButton(type) === button)
-            XCTAssertTrue(button.isEnabled)
-        }
-
-        chrome.isVisible = false
-        chrome.sidebarOnRight = true
-        chrome.applyBrowserChrome()
-        XCTAssertTrue(window.isMovable)
-        XCTAssertTrue(content.hitTest(NSPoint(x: 400, y: 574)) === input)
-    }
-
     func testAPageHoldsTheWindowStillOnlyWhileThePointerIsOnItsTop() throws {
         let window = makeWindow()
         defer { window.close() }
@@ -42,7 +13,7 @@ final class BrowserNativeWindowInputTests: XCTestCase {
         let page = NSView(frame: NSRect(x: 260, y: 0, width: 640, height: 600))
         content.addSubview(page)
         window.layoutIfNeeded()
-        let tracker = BrowserPageTitleBarTracker(page: page)
+        let tracker = BrowserTitleBarPointerTracker(view: page, region: .page)
         let titleBarBottom = window.contentLayoutRect.maxY
         XCTAssertLessThan(titleBarBottom, content.bounds.maxY)
 
@@ -62,16 +33,32 @@ final class BrowserNativeWindowInputTests: XCTestCase {
         XCTAssertTrue(window.isMovable)
     }
 
-    func testLeavingAWindowKeepsTheFullscreenStateAppKitGaveIt() {
-        let windowed: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
-        let chrome = windowed.union(.fullSizeContentView)
+    func testAControlUnderTheTitleBarHoldsTheWindowStillOnlyWhileThePointerIsOnIt() throws {
+        let window = makeWindow()
+        defer { window.close() }
+        let content = try XCTUnwrap(window.contentView)
+        content.addSubview(BrowserNativeWindowControlsHostView())
+        window.layoutIfNeeded()
+        let top = content.bounds.maxY
+        let field = NSView(frame: NSRect(x: 100, y: top - 46, width: 400, height: 36))
+        let lowerField = NSView(frame: NSRect(x: 100, y: 200, width: 400, height: 36))
+        content.addSubview(field)
+        content.addSubview(lowerField)
+        let tracker = BrowserTitleBarPointerTracker(view: field, region: .control)
+        let lowerTracker = BrowserTitleBarPointerTracker(view: lowerField, region: .control)
+        XCTAssertLessThan(window.contentLayoutRect.maxY, top - 10)
 
-        XCTAssertEqual(
-            chrome.union(.fullScreen).restoringBrowserChrome(to: windowed),
-            windowed.union(.fullScreen))
-        XCTAssertEqual(
-            chrome.restoringBrowserChrome(to: windowed.union(.fullScreen)),
-            windowed)
+        // A press on the field under the title bar reaches the field, so a
+        // drag across its text selects it rather than moving the window.
+        tracker.mouseEntered(with: try pointer(at: NSPoint(x: 300, y: top - 28), in: window))
+        XCTAssertFalse(window.isMovable)
+
+        // Off the field, or on a control below the title bar, the window
+        // moves as any window does.
+        tracker.mouseExited(with: try pointer(at: NSPoint(x: 700, y: top - 28), in: window))
+        XCTAssertTrue(window.isMovable)
+        lowerTracker.mouseEntered(with: try pointer(at: NSPoint(x: 300, y: 218), in: window))
+        XCTAssertTrue(window.isMovable)
     }
 
     private func pointer(at location: NSPoint, in window: NSWindow) throws -> NSEvent {

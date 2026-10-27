@@ -1,4 +1,3 @@
-import Dispatch
 import Observation
 import UIKit
 import UniformTypeIdentifiers
@@ -8,7 +7,6 @@ import WebKit
 @MainActor
 final class MobileBrowserPageStore:
     BrowserPageOwner,
-    MobileBrowserPageHosting,
     BrowserDefaultPageZoomObserving
 {
     typealias HTTPAuthenticationCredentialLoader =
@@ -52,8 +50,9 @@ final class MobileBrowserPageStore:
     var presentedTabIDsAcrossWindows: Set<UUID> { Set(presentedTabIDs) }
     var residencyRevision: Int { host.revision }
     private(set) var urlCopyFeedbackRevision = 0
-    private(set) var pageZoomFeedbackLabel = "100%"
-    private(set) var pageZoomFeedbackRevision = 0
+    /// What the page's feedback capsule says last, which each new revision shows.
+    private(set) var pageFeedback = MobilePageFeedback.pageZoom("100%")
+    private(set) var pageFeedbackRevision = 0
     let downloadCenter: BrowserDownloadCenter
     let downloadRiskConfirmation: MobileDownloadRiskConfirmationCoordinator
     /// The answers to the core's questions about this mode's downloads, which
@@ -65,7 +64,6 @@ final class MobileBrowserPageStore:
     @ObservationIgnored let serverTrustOverrides = BrowserServerTrustOverrideStore()
     @ObservationIgnored private let mediaSessionStore: BrowserMediaSessionStore?
     @ObservationIgnored let linkDestinationHost: BrowserLinkDestinationHost
-    @ObservationIgnored private let openNewTab: (URL) -> Void
     @ObservationIgnored private let openModifiedLink: ModifiedLinkOpener
     @ObservationIgnored private let openPeek: (BrowserPeekRequest) -> Void
     @ObservationIgnored private let browsingMode: BrowserBrowsingMode
@@ -74,15 +72,12 @@ final class MobileBrowserPageStore:
     @ObservationIgnored private let loadHTTPAuthenticationCredential: HTTPAuthenticationCredentialLoader
     @ObservationIgnored private let saveHTTPAuthenticationCredential: HTTPAuthenticationCredentialSaver
     @ObservationIgnored let contentBlocking: BrowserContentBlockingController
-    @ObservationIgnored private var memoryPressureSource: (any DispatchSourceMemoryPressure)?
-    @ObservationIgnored private var memoryPressureCoalescer = BrowserMemoryPressureCoalescer()
     /// The window this store hosts pages for. Its pages open through the core
     /// from this window, in its workspace.
     @ObservationIgnored let browser: BrowserStore
 
     init(
         browser: BrowserStore,
-        monitorsMemoryPressure: Bool = false,
         browsingMode: BrowserBrowsingMode = .standard,
         usesEphemeralWebsiteDataStores: Bool =
             BrowserLaunchEnvironment.current.requiresIsolation,
@@ -96,7 +91,6 @@ final class MobileBrowserPageStore:
             @escaping HTTPAuthenticationCredentialSaver = { _, _ in },
         tabStateArchive: (any BrowserTabStateArchiving)? = nil,
         linkDestinationHost: BrowserLinkDestinationHost = .unavailable,
-        openNewTab: @escaping (URL) -> Void = { _ in },
         openModifiedLink: @escaping ModifiedLinkOpener = { _, _, _ in nil },
         openPeek: @escaping (BrowserPeekRequest) -> Void = { _ in }
     ) {
@@ -113,7 +107,6 @@ final class MobileBrowserPageStore:
         self.loadHTTPAuthenticationCredential = loadHTTPAuthenticationCredential
         self.saveHTTPAuthenticationCredential = saveHTTPAuthenticationCredential
         self.linkDestinationHost = linkDestinationHost
-        self.openNewTab = openNewTab
         self.openModifiedLink = openModifiedLink
         self.openPeek = openPeek
         // Windows share their browsing mode's downloads; a store made on its
@@ -129,9 +122,6 @@ final class MobileBrowserPageStore:
         downloadCenter = downloads.center
         downloadPrompts = downloads.prompts
         contentBlocking = BrowserContentBlockingController(rules: browser.core.engines.webKit?.contentRules)
-        if monitorsMemoryPressure {
-            installMemoryPressureSource()
-        }
         pageZoomPreferences.register(self)
         host.dropPresentation = { [weak self] in self?.dropPresentation(of: $0) }
         browser.core.engines.observeRecords(self) { [weak self] in self?.restyleVisitedLinks(after: $0) }
@@ -140,8 +130,32 @@ final class MobileBrowserPageStore:
         followPutAwayPages()
     }
 
-    deinit {
-        memoryPressureSource?.cancel()
+    /// A standard window's store: its pages' saved sign-ins, link destinations
+    /// and modified clicks go through `browser`, and `transientBrowsing` shows
+    /// their Peeks.
+    convenience init(
+        window browser: BrowserStore, usesEphemeralWebsiteDataStores: Bool,
+        permissionCenter: BrowserSitePermissionCenter, mediaSessionStore: BrowserMediaSessionStore?,
+        downloads: MobileBrowserDownloads?, tabStateArchive: (any BrowserTabStateArchiving)?,
+        spaceAccess: BrowserSpaceAccessController, transientBrowsing: BrowserTransientBrowsingCoordinator
+    ) {
+        self.init(
+            browser: browser, usesEphemeralWebsiteDataStores: usesEphemeralWebsiteDataStores,
+            permissionCenter: permissionCenter, mediaSessionStore: mediaSessionStore, downloads: downloads,
+            loadHTTPAuthenticationCredential: { protectionSpace, spaceID in
+                try await browser.httpAuthenticationCredential(for: protectionSpace, in: spaceID)
+            },
+            saveHTTPAuthenticationCredential: { request, spaceID in
+                try await browser.saveHTTPAuthenticationCredential(
+                    username: request.username, password: request.password,
+                    protectionSpace: request.protectionSpace, in: spaceID, replacing: request.replacing)
+            },
+            tabStateArchive: tabStateArchive,
+            linkDestinationHost: BrowserLinkDestinationHost(browser: browser, spaceAccess: spaceAccess),
+            openModifiedLink: { url, spaceID, selecting in
+                browser.openModifiedLink(url, in: spaceID, selecting: selecting)
+            },
+            openPeek: { request in transientBrowsing.presentPeek(request) })
     }
 
     var activeURL: URL? { activePage?.live.displayURL }
@@ -184,6 +198,9 @@ final class MobileBrowserPageStore:
         return activePage?.corePage.navigate(to: input) ?? false
     }
 
+    /// Starts the original request in its newly registered tab, independently
+    /// of whether the shared focus policy selects it, on the engine of page
+    /// `opener`, which followed the link.
     func loadOpenedLink(
         _ registration: BrowserModifiedLinkRegistration, request: URLRequest, selecting: Bool, opener: UUID
     ) {
@@ -435,7 +452,6 @@ final class MobileBrowserPageStore:
                     try await saveHTTPAuthenticationCredential(request, space.id)
                 },
                 linkDestinationHost: linkDestinationHost,
-                openNewTab: openNewTab,
                 openModifiedLink: openModifiedLink,
                 openPeek: openPeek
             ))
@@ -470,6 +486,9 @@ final class MobileBrowserPageStore:
         return true
     }
 
+    /// Retires an empty surface whose initial navigation became a download:
+    /// a transient one closes, and a tab's page asks the core to close it as
+    /// its own script would.
     func discardDownloadOnlyPage(_ page: MobileBrowserPage) {
         guard !host.discardDownloadOnlyTransientPage(page) else { return }
         page.corePage.report(PageCloseRequested(pageID: page.corePage.id))
@@ -510,20 +529,23 @@ final class MobileBrowserPageStore:
 
     func zoomIn() {
         guard activePage?.zoomIn() == true else { return }
-        pageZoomFeedbackLabel = pageZoomLabel
-        pageZoomFeedbackRevision &+= 1
+        showFeedback(.pageZoom(pageZoomLabel))
     }
 
     func zoomOut() {
         guard activePage?.zoomOut() == true else { return }
-        pageZoomFeedbackLabel = pageZoomLabel
-        pageZoomFeedbackRevision &+= 1
+        showFeedback(.pageZoom(pageZoomLabel))
     }
 
     func resetZoom() {
         guard activePage?.resetZoom() == true else { return }
-        pageZoomFeedbackLabel = pageZoomLabel
-        pageZoomFeedbackRevision &+= 1
+        showFeedback(.pageZoom(pageZoomLabel))
+    }
+
+    /// Shows `feedback` in the page's capsule.
+    func showFeedback(_ feedback: MobilePageFeedback) {
+        pageFeedback = feedback
+        pageFeedbackRevision &+= 1
     }
 
     @discardableResult
@@ -560,33 +582,6 @@ final class MobileBrowserPageStore:
         MobileBrowserDialogPresenter.exportDownloadedFile(
             at: destinationURL,
             to: destination
-        )
-    }
-
-    /// Relieves one squeeze at `level`, once however many signals it sends:
-    /// the host lets go of what the core does not decide, then the core
-    /// unloads the tab pages off screen longest, as many as a phone or tablet
-    /// gives back at that level, from what each page last told it about its
-    /// media.
-    func handleMemoryPressure(
-        _ level: MemoryPressureLevel,
-        at time: Date = .now
-    ) {
-        guard memoryPressureCoalescer.shouldHandle(level, at: time) else { return }
-        host.relieveMemoryPressure(level, presenting: presentedTabIDs)
-        _ = try? browser.core.send(ReportMemoryPressure(level: level))
-    }
-
-    /// Handles one kernel pressure event. The raw event has to be captured inside
-    /// the dispatch source's own handler, so it arrives here as a value rather than
-    /// being read back off the source.
-    func handleMemoryPressureEvent(
-        _ event: DispatchSource.MemoryPressureEvent,
-        at time: Date = .now
-    ) {
-        handleMemoryPressure(
-            event.contains(.critical) ? .critical : .warning,
-            at: time
         )
     }
 
@@ -658,7 +653,6 @@ final class MobileBrowserPageStore:
                     try await saveHTTPAuthenticationCredential(request, space.id)
                 },
                 linkDestinationHost: linkDestinationHost,
-                openNewTab: openNewTab,
                 openModifiedLink: openModifiedLink,
                 openPeek: openPeek
             ))
@@ -705,28 +699,5 @@ final class MobileBrowserPageStore:
     /// before an inactive page is unloaded.
     func archiveResidentTabStates() {
         host.archiveResidentTabStates()
-    }
-
-    /// Listens for the kernel's own pressure events. UIKit's memory warning only
-    /// reaches a foreground app and arrives late, so on iOS — where the system
-    /// kills an app rather than swapping — this is the signal that gets ahead of a
-    /// termination. It stays a thin wire: everything it decides is the level.
-    private func installMemoryPressureSource() {
-        let source = DispatchSource.makeMemoryPressureSource(
-            eventMask: [.warning, .critical],
-            queue: .main
-        )
-        source.setEventHandler { [weak self] in
-            // `dispatch_source_get_data` is only defined while this handler is
-            // running: read after a hop it answers zero, and critical pressure
-            // would forever look like a warning. The source runs on the main
-            // queue, so the event is captured and handled without one.
-            MainActor.assumeIsolated {
-                guard let self, let source = self.memoryPressureSource else { return }
-                self.handleMemoryPressureEvent(source.data)
-            }
-        }
-        memoryPressureSource = source
-        source.resume()
     }
 }

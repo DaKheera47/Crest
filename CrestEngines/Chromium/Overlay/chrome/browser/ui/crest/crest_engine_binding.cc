@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <optional>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -47,6 +48,8 @@ namespace crest {
 
 namespace {
 
+// Seconds from the Unix epoch to 1 January 2001, where the wire counts dates from.
+constexpr double kReferenceDateOffset = 978307200;
 // The longest link address the binding asks the core about or stages.
 constexpr size_t kLinkBytes = 8192;
 // The most links staged at once, and how long one waits for its Peek.
@@ -381,6 +384,14 @@ void EngineBinding::Handle(const engine::EraseProfileData& command) {
 
 void EngineBinding::Handle(const engine::EraseSiteData& command) {
   Erase(command);
+}
+
+void EngineBinding::Handle(const engine::EraseBrowsingData& command) {
+  Erase(command);
+}
+
+void EngineBinding::Handle(const engine::ReadSiteData& command) {
+  Read(command);
 }
 
 void EngineBinding::Handle(const engine::AdoptOfferedPage& command) {
@@ -963,6 +974,21 @@ void CREST_CALL EngineBinding::PresentTo(void* context, crest_engine_present_t p
   binding->ui_ = ui;
 }
 
+// The page answers a request about it, or its agent what an agent asks. An
+// agent's requests reach only pages of the persistent profiles the core let
+// it use; the core and the platform decide which, never the page.
+template <typename Request>
+typename engine::PageRequestAnswer<Request>::Type EngineBinding::Handle(const Request& request) {
+  using Nothing = typename engine::PageRequestAnswer<Request>::Type;
+  EnginePage* page = Find(GuidText(request.page_id));
+  if constexpr (requires(PageAgent& agent) { agent.Answer(request); }) {
+    PageAgent* agent = page ? page->Agent() : nullptr;
+    return agent ? agent->Answer(request) : Nothing{};
+  } else {
+    return page ? page->Answer(request) : Nothing{};
+  }
+}
+
 // Hands each request to its own handler, which answers with the type the
 // contract names for it.
 std::vector<uint8_t> EngineBinding::Answer(const engine::PageRequest& request) {
@@ -977,46 +1003,6 @@ std::vector<uint8_t> EngineBinding::Answer(const engine::PageRequest& request) {
       request);
 }
 
-bool EngineBinding::Handle(const engine::ReloadPage& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->Reload(request.bypasses_cache);
-}
-
-bool EngineBinding::Handle(const engine::StopLoading& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->StopLoading();
-}
-
-bool EngineBinding::Handle(const engine::ZoomPage& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->Zoom(request.factor);
-}
-
-bool EngineBinding::Handle(const engine::FindInPage& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->Find(request.query, request.backwards, request.case_sensitive);
-}
-
-bool EngineBinding::Handle(const engine::CapturePage& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->Capture(request.capture_id, request.area, request.width);
-}
-
-bool EngineBinding::Handle(const engine::ExportPage& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->Export(request.export_id, request.format, request.width);
-}
-
-engine::InteractionState EngineBinding::Handle(const engine::SaveInteractionState& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return engine::InteractionState{.state = page ? page->SaveInteractionState() : std::nullopt};
-}
-
-bool EngineBinding::Handle(const engine::RestoreInteractionState& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->Restore(request.state, request.expected_url);
-}
-
 bool EngineBinding::Handle(const engine::MovePageToWindow& request) {
   const std::string key = GuidText(request.page_id);
   EnginePage* page = Find(key);
@@ -1027,21 +1013,6 @@ bool EngineBinding::Handle(const engine::MovePageToWindow& request) {
   }
   page->set_window(window);
   return true;
-}
-
-bool EngineBinding::Handle(const engine::ShowPage& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->Show();
-}
-
-bool EngineBinding::Handle(const engine::HidePage& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->Hide();
-}
-
-engine::PageIconImage EngineBinding::Handle(const engine::PageIcon& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return engine::PageIconImage{.image = page ? page->icon() : std::nullopt};
 }
 
 // A page the platform comes to after the engine made it, or failed to,
@@ -1057,147 +1028,6 @@ bool EngineBinding::Handle(const engine::WatchPage& request) {
     return true;
   }
   return false;
-}
-
-engine::PageMediaState EngineBinding::Handle(const engine::PageMedia& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return engine::PageMediaState{.activity = page ? page->MediaActivity() : engine::PageMediaActivity::kNone};
-}
-
-bool EngineBinding::Handle(const engine::EnterPictureInPicture& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->EnterPictureInPicture();
-}
-
-bool EngineBinding::Handle(const engine::ActivateMediaSession& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->ActivateMediaSession(request.document);
-}
-
-bool EngineBinding::Handle(const engine::PerformMediaAction& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->PerformMediaAction(request.document, request.action);
-}
-
-bool EngineBinding::Handle(const engine::MuteMediaSession& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->MuteMediaSession(request.document, request.muted);
-}
-
-bool EngineBinding::Handle(const engine::ObserveAudioSpectrum& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->ObserveAudioSpectrum(request.observed);
-}
-
-bool EngineBinding::Handle(const engine::AnswerInfoBar& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->AnswerInfoBar(request.info_bar_id, request.answer);
-}
-
-bool EngineBinding::Handle(const engine::RefreshPageIcon& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->RefreshIcon();
-}
-
-bool EngineBinding::Handle(const engine::ShowBlockedPopups& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->ShowBlockedPopups();
-}
-
-bool EngineBinding::Handle(const engine::AddContentScript& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->AddContentScript(request.source, request.main_frame_only);
-}
-
-bool EngineBinding::Handle(const engine::EvaluateContentScript& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->EvaluateContentScript(request.evaluation_id, request.source, request.frame_id);
-}
-
-// An agent's requests reach only pages of the persistent profiles the core
-// let it use; the core and the platform decide which, never the page.
-bool EngineBinding::Handle(const engine::EvaluatePageScript& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  PageAgent* agent = page ? page->Agent() : nullptr;
-  return agent && agent->Evaluate(request.evaluation_id, request.source, request.world);
-}
-
-bool EngineBinding::Handle(const engine::ClickPage& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  PageAgent* agent = page ? page->Agent() : nullptr;
-  return agent && agent->Click(request.input_id, request.point, request.button, request.count, request.modifiers);
-}
-
-bool EngineBinding::Handle(const engine::HoverPage& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  PageAgent* agent = page ? page->Agent() : nullptr;
-  return agent && agent->Hover(request.input_id, request.point);
-}
-
-bool EngineBinding::Handle(const engine::ScrollPage& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  PageAgent* agent = page ? page->Agent() : nullptr;
-  return agent && agent->Scroll(request.input_id, request.point, request.delta_x, request.delta_y);
-}
-
-bool EngineBinding::Handle(const engine::TypeInPage& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  PageAgent* agent = page ? page->Agent() : nullptr;
-  return agent && agent->Type(request.input_id, request.text);
-}
-
-bool EngineBinding::Handle(const engine::PressKeyInPage& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  PageAgent* agent = page ? page->Agent() : nullptr;
-  return agent && agent->PressKey(request.input_id, request.key, request.modifiers);
-}
-
-bool EngineBinding::Handle(const engine::ObservePageActivity& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->ObserveActivity(request.observing);
-}
-
-engine::PageConsoleLog EngineBinding::Handle(const engine::ReadPageConsole& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  PageAgent* agent = page ? page->Agent() : nullptr;
-  return agent ? agent->Console(request.after) : engine::PageConsoleLog{};
-}
-
-engine::PageNetworkLog EngineBinding::Handle(const engine::ReadPageNetwork& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  PageAgent* agent = page ? page->Agent() : nullptr;
-  return agent ? agent->Network(request.after) : engine::PageNetworkLog{};
-}
-
-bool EngineBinding::Handle(const engine::HoldPageRendering& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  PageAgent* agent = page ? page->Agent() : nullptr;
-  return agent && agent->HoldRendering(request.held, request.width, request.height);
-}
-
-bool EngineBinding::Handle(const engine::RefreshStoreListing& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->FinishStoreRequest();
-}
-
-bool EngineBinding::Handle(const engine::OpenInspector& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->OpenInspector(request.panel);
-}
-
-bool EngineBinding::Handle(const engine::CloseInspector& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->CloseInspector();
-}
-
-bool EngineBinding::Handle(const engine::PageInspected& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->Inspected();
-}
-
-engine::InspectorLayout EngineBinding::Handle(const engine::LayoutInspector& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page ? page->LayoutInspector(request.width, request.height) : engine::InspectorLayout{};
 }
 
 // The toolbar's actions for a page's own tab, and a Space's pinned ones with
@@ -1231,16 +1061,6 @@ engine::SidePanelScope EngineBinding::Handle(const engine::HasSidePanel& request
   EnginePage* page = Find(GuidText(request.page_id));
   return page ? EngineExtensions::SidePanelScopeFor(page->web_contents(), request.extension_id)
               : engine::SidePanelScope::kUnavailable;
-}
-
-engine::CertificateChain EngineBinding::Handle(const engine::PageCertificates& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page ? page->CertificateChain() : engine::CertificateChain{};
-}
-
-bool EngineBinding::Handle(const engine::SetSitePermission& request) {
-  EnginePage* page = Find(GuidText(request.page_id));
-  return page && page->SetSitePermission(request.permission, request.allowed);
 }
 
 // Chromium enforces capture permissions itself: the SetSitePermission that
@@ -1324,33 +1144,86 @@ void EngineBinding::Erase(const engine::EraseProfileData& erasing) {
 // A private profile keeps a site's data only while it is open; a regular one
 // on disk is loaded to clear it, and one never created has nothing to clear.
 void EngineBinding::Erase(const engine::EraseSiteData& erasing) {
-  const std::string id = GuidText(erasing.profile_id);
-  auto done = base::BindOnce(
+  WithStoredData(GuidText(erasing.profile_id), erasing.ephemeral,
+                 base::BindOnce(
+                     [](std::vector<std::string> hosts, std::vector<engine::BrowsingDataCategory> categories,
+                        base::OnceCallback<void(bool)> done, Profile* profile, bool kept) {
+                       if (!profile) {
+                         std::move(done).Run(!kept);
+                         return;
+                       }
+                       crest::SiteData::Clear(profile, hosts, categories, std::move(done));
+                     },
+                     erasing.hosts, erasing.categories, ErasureAnswer(erasing.erasure_id)));
+}
+
+// What changed in a time range goes the way a site's data does.
+void EngineBinding::Erase(const engine::EraseBrowsingData& erasing) {
+  std::optional<base::Time> since;
+  if (erasing.since) {
+    since = base::Time::FromSecondsSinceUnixEpoch(erasing.since->seconds_since_2001 + kReferenceDateOffset);
+  }
+  WithStoredData(GuidText(erasing.profile_id), erasing.ephemeral,
+                 base::BindOnce(
+                     [](std::optional<base::Time> since, std::vector<engine::BrowsingDataCategory> categories,
+                        base::OnceCallback<void(bool)> done, Profile* profile, bool kept) {
+                       if (!profile) {
+                         std::move(done).Run(!kept);
+                         return;
+                       }
+                       crest::SiteData::Clear(profile, since, categories, std::move(done));
+                     },
+                     since, erasing.categories, ErasureAnswer(erasing.erasure_id)));
+}
+
+// A profile that keeps nothing lists no site; one that would not load could
+// list none of its own.
+void EngineBinding::Read(const engine::ReadSiteData& reading) {
+  auto answer = base::BindOnce(
+      [](base::WeakPtr<EngineBinding> binding, engine::Guid id, bool read, std::vector<engine::StoredSite> sites) {
+        if (binding) {
+          binding->Report(engine::SiteDataRead{.reading_id = id, .sites = std::move(sites), .read = read});
+        }
+      },
+      weak_factory_.GetWeakPtr(), reading.reading_id);
+  WithStoredData(GuidText(reading.profile_id), reading.ephemeral,
+                 base::BindOnce(
+                     [](base::OnceCallback<void(bool, std::vector<engine::StoredSite>)> answer, Profile* profile,
+                        bool kept) {
+                       if (!profile) {
+                         std::move(answer).Run(!kept, {});
+                         return;
+                       }
+                       crest::SiteData::Read(profile, base::BindOnce(std::move(answer), true));
+                     },
+                     std::move(answer)));
+}
+
+void EngineBinding::WithStoredData(const std::string& id,
+                                   bool ephemeral,
+                                   base::OnceCallback<void(Profile*, bool)> use) {
+  if (Profile* loaded = Profiles().Find(id)) {
+    std::move(use).Run(loaded, true);
+    return;
+  }
+  if (ephemeral || !Profiles().HasStore(id)) {
+    std::move(use).Run(nullptr, false);
+    return;
+  }
+  Profiles().Load(id, /*is_private=*/false,
+                  base::BindOnce([](base::OnceCallback<void(Profile*, bool)> use,
+                                    Profile* profile) { std::move(use).Run(profile, true); },
+                                 std::move(use)));
+}
+
+base::OnceCallback<void(bool)> EngineBinding::ErasureAnswer(const engine::Guid& erasure) {
+  return base::BindOnce(
       [](base::WeakPtr<EngineBinding> binding, engine::Guid erasure, bool erased) {
         if (binding) {
           binding->Report(engine::DataErased{.erasure_id = erasure, .erased = erased});
         }
       },
-      weak_factory_.GetWeakPtr(), erasing.erasure_id);
-  const GURL site("https://" + erasing.host + "/");
-  if (Profile* loaded = Profiles().Find(id)) {
-    crest::ClearSiteData(loaded, site, std::move(done));
-    return;
-  }
-  if (erasing.ephemeral || !Profiles().HasStore(id)) {
-    std::move(done).Run(true);
-    return;
-  }
-  Profiles().Load(id, /*is_private=*/false,
-                  base::BindOnce(
-                      [](GURL site, base::OnceCallback<void(bool)> done, Profile* profile) {
-                        if (!profile) {
-                          std::move(done).Run(false);
-                          return;
-                        }
-                        crest::ClearSiteData(profile, site, std::move(done));
-                      },
-                      site, std::move(done)));
+      weak_factory_.GetWeakPtr(), erasure);
 }
 
 // Reports and presentations.

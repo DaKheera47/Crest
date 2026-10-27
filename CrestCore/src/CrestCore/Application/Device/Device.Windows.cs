@@ -58,6 +58,22 @@ internal sealed partial class Device {
         lock (gate) return open.TryGetValue(windowId, out var window) ? window : throw new Rejected(new WindowNotOpen(windowId));
     }
 
+    /// What `window` switches between in `space` (see `Window.RecentItems`).
+    /// While it has listed no other tab there, as after a launch or in a new
+    /// window, the Space's tab used last stands second, a split as one item,
+    /// unless another open window shows it. A locked Space lists nothing, as
+    /// its palette offers none of its tabs.
+    internal IReadOnlyList<RecentTabItem> RecentItems(Window window, SpaceState space) {
+        if (Workspace(window.WorkspaceId).IsLocked(space)) return [];
+        lock (gate) {
+            var items = window.RecentItems(space);
+            if (items.Count != 1) return items;
+            HashSet<Guid> elsewhere = [.. open.Values.Where(other => other.Id != window.Id)
+                .Select(other => other.Tab(space.Id)).OfType<Guid>()];
+            return window.LastUsed(space, elsewhere) is { } last ? [items[0], last] : items;
+        }
+    }
+
     /// Where the open window stands in `spaceId`, or in the Space it shows
     /// when that is null: its workspace, that Space, and the tab it shows
     /// there, if any. Null for a window that is not open.
@@ -103,7 +119,7 @@ internal sealed partial class Device {
     /// member of the tab's split.
     internal bool Shows(Guid workspaceId, Guid spaceId, Guid tabId) {
         lock (gate) {
-            if (workspaces.GetValueOrDefault(workspaceId)?.Current.Spaces.FirstOrDefault(space => space.Id == spaceId) is not { } space)
+            if (workspaces.GetValueOrDefault(workspaceId)?.Current.Space(spaceId) is not { } space)
                 return false;
             var split = space.Tabs.FirstOrDefault(tab => tab.Id == tabId)?.SplitGroupId;
             return open.Values.Any(window => window.WorkspaceId == workspaceId && window.ShownSpaceId == spaceId
@@ -130,6 +146,25 @@ internal sealed partial class Device {
         if (owners.Count != 1) return null;
         var (owner, only) = owners[0];
         return owner.Value.IsDeleting(only.Id) || owner.Value.IsLocked(only) ? null : (owner.Key, only.Id);
+    }
+
+    /// Refused with `SpaceLocked` when a locked Space holds profile
+    /// `profileId`: what the profile's engines keep is the grant's to reveal
+    /// or erase, as the Space's own records are.
+    internal void RefuseLockedProfile(Guid profileId) {
+        if (LockedSpace(profileId) is { } spaceId) throw new Rejected(new SpaceLocked(spaceId));
+    }
+
+    /// The locked Space that holds profile `profileId`, or nil when none does.
+    internal Guid? LockedSpace(Guid profileId) {
+        KeyValuePair<Guid, NativeSessionAuthority>[] attached;
+        lock (gate) attached = [.. workspaces];
+        foreach (var (_, workspace) in attached) {
+            foreach (var space in workspace.Current.Spaces.Where(space => space.ProfileId == profileId)) {
+                if (workspace.IsLocked(space)) return space.Id;
+            }
+        }
+        return null;
     }
 
     /// The workspaces closing the windows `windowIds` leaves without an open
@@ -163,7 +198,7 @@ internal sealed partial class Device {
 
     /// The Space a window may show: one the session holds that is not being deleted.
     internal static SpaceState? Available(SessionState session, Guid spaceId) =>
-        session.SpaceDeletions.Any(deletion => deletion.SpaceId == spaceId) ? null : session.Spaces.FirstOrDefault(space => space.Id == spaceId);
+        session.PendingDeletion(spaceId) is not null ? null : session.Space(spaceId);
 
     #endregion
 }

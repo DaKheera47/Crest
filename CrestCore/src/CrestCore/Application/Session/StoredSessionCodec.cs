@@ -16,7 +16,11 @@ namespace CrestCore.Application;
 internal static partial class StoredSessionCodec {
     #region Variables
 
-    private static readonly DateTimeOffset ReferenceEpoch = new(2001, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    /// Seconds from 1970 to 2001, where the stored dates count from, as Apple
+    /// platforms' dates do.
+    internal const double ReferenceEpochUnixSeconds = 978_307_200;
+
+    private static readonly DateTimeOffset ReferenceEpoch = DateTimeOffset.UnixEpoch.AddSeconds(ReferenceEpochUnixSeconds);
 
     /// The stored member names, shared by every record that uses one.
     internal static class Key {
@@ -102,6 +106,7 @@ internal static partial class StoredSessionCodec {
         public const string Placement = "placement";
         public const string PositionModifiedAt = "positionModifiedAt";
         public const string PrefersOpenTabs = "prefersOpenTabs";
+        public const string ProviderSpaceTrigger = "providerSpaceTrigger";
         public const string Profile = "profile";
         public const string ProfileId = "profileID";
         public const string RawValue = "rawValue";
@@ -124,6 +129,7 @@ internal static partial class StoredSessionCodec {
         public const string SelectedSearchProviderId = "selectedSearchProviderID";
         public const string ShowsOutline = "showsOutline";
         public const string ShowsReasons = "showsReasons";
+        public const string ShowsRecentTabs = "showsRecentTabs";
         public const string ShowsTexture = "showsTexture";
         public const string ShowsTopHit = "showsTopHit";
         public const string Source = "source";

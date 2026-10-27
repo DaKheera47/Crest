@@ -60,7 +60,7 @@ final class BrowserPage: NSObject, BrowserMediaSessionCommandEndpoint {
     /// What the page's engine is built with, which a new engine takes too.
     @ObservationIgnored private let mediaSessionStore: BrowserMediaSessionStore?
     @ObservationIgnored private let allowsCredentialAccess: Bool
-    @ObservationIgnored private var isPrivateBrowsing = false
+    @ObservationIgnored private(set) var isPrivateBrowsing = false
 
     /// What the page shows as the core holds it: its address, title,
     /// loading, history, security, failure and media. Presentation that
@@ -126,7 +126,7 @@ final class BrowserPage: NSObject, BrowserMediaSessionCommandEndpoint {
     var credentialFillRequest: BrowserCredentialFillRequest? { credentialState.fillRequest }
     var credentialSaveCandidate: BrowserCredentialSaveCandidate? { credentialState.saveCandidate }
     /// The pool that owns this page. Weak because the pool owns the page.
-    @ObservationIgnored weak var host: (any BrowserPageHosting)?
+    @ObservationIgnored weak var host: BrowserPagePool?
     @ObservationIgnored var windowRouting: BrowserPageWindowRouting?
 
     /// True when web content opened this page through `window.open()`. WebKit
@@ -169,8 +169,6 @@ final class BrowserPage: NSObject, BrowserMediaSessionCommandEndpoint {
     @ObservationIgnored let profileID: UUID
     @ObservationIgnored let spaceName: String
     @ObservationIgnored let navigationDecider: BrowserNavigationDecider
-    /// Opens a URL in a new tab of the page's window.
-    @ObservationIgnored let openNewTab: (URL) -> Void
     @ObservationIgnored let externalSchemeCoordinator: BrowserExternalSchemeCoordinator
     /// The URL Crest asked this page to load, as opposed to one web content
     /// asked for. Only an app-initiated load may reach a `file:` URL.
@@ -277,7 +275,6 @@ final class BrowserPage: NSObject, BrowserMediaSessionCommandEndpoint {
             @escaping BrowserHTTPAuthenticationSession.LoadCredential = { _ in nil },
         saveHTTPAuthenticationCredential:
             @escaping BrowserHTTPAuthenticationSession.SaveCredential = { _ in },
-        openNewTab: @escaping (URL) -> Void,
         openModifiedLink: @escaping (URLRequest, UUID, Bool) -> Void = { _, _, _ in },
         openPeek: @escaping (BrowserPeekRequest) -> Void = { _ in },
         handleLinkDrag: @escaping (BrowserPeekInteractionEvent) -> Void = { _ in },
@@ -351,7 +348,6 @@ final class BrowserPage: NSObject, BrowserMediaSessionCommandEndpoint {
             opensExternalURL: opensExternalURL
         )
         self.externalSchemeCoordinator = externalSchemeCoordinator
-        self.openNewTab = openNewTab
         super.init()
         zoomSession.apply = { [weak self] _ in
             guard let self else { return }
@@ -1096,7 +1092,6 @@ final class BrowserPage: NSObject, BrowserMediaSessionCommandEndpoint {
         // actually starts provisional navigation.
         linkDrag?.cancel()
         isRegionCapturePresented = false
-        engineAdapter.prepareForNavigation()
         sitePermissionSession.resetMediaGrants()
         sitePermissionRequests.cancelAll()
         translation.reset()

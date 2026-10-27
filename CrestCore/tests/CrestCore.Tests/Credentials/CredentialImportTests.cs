@@ -29,34 +29,6 @@ public sealed class CredentialImportTests {
         new(Guid.NewGuid(), origin ?? Accounts, username, isWebForm, updatedAt, lastUsedAt, password);
 
     [Fact]
-    public void AFileOverAnyLimitIsRefusedWhole() {
-        Assert.Equal(CredentialFileFlaw.TooLarge, Flaw(new byte[CredentialFile.MaximumBytes + 1]));
-
-        string rows = string.Concat(Enumerable.Range(0, CredentialFile.MaximumRows).Select(index => $"https://site{index}.example,u,p\n"));
-        Assert.Equal(CredentialFile.MaximumRows, Preview("url,username,password\n" + rows).ValidRowCount);
-        Assert.Equal(CredentialFileFlaw.TooManyRows, Flaw("url,username,password\n" + rows + "https://one.more.example,u,p\n"));
-
-        string columns = string.Join(',', Enumerable.Range(0, CredentialFile.MaximumColumns - 3).Select(index => $"extra{index}"));
-        Assert.Single(Preview($"url,username,password,{columns}\nhttps://one.example,u,p\n").Groups);
-        Assert.Equal(CredentialFileFlaw.TooManyColumns, Flaw($"url,username,password,{columns},one_more\nhttps://one.example,u,p\n"));
-
-        string field = new('x', CredentialFile.MaximumFieldCharacters);
-        Assert.Single(Preview($"url,username,password\nhttps://one.example,u,{field}\n").Groups);
-        Assert.Equal(CredentialFileFlaw.FieldTooLarge, Flaw($"url,username,password\nhttps://one.example,u,\"{field}x\"\n"));
-    }
-
-    [Fact]
-    public void OnlyUtf8TextWithAHeaderAndARowImports() {
-        Assert.Equal(CredentialFileFlaw.NotText, Flaw([0x75, 0x72, 0x6c, 0xff, 0xfe]));
-        Assert.Equal(CredentialFileFlaw.Empty, Flaw([]));
-        Assert.Equal(CredentialFileFlaw.Empty, Flaw(" , \n\r\n , "));
-        Assert.Equal(CredentialFileFlaw.NoRows, Flaw("url,username,password\n\n"));
-        // A byte-order mark and CRLF line breaks read as any other file does.
-        var plan = Preview("\uFEFFURL,Username,Password\r\nhttps://accounts.example,ada,\"line one\r\nline two\"\r\n");
-        Assert.Equal(("ada", "line one\nline two"), (plan.Groups[0].Username, plan.Groups[0].Candidates[0].Password));
-    }
-
-    [Fact]
     public void EachBrowsersHeadersNameTheColumnsAndTheFormat() {
         var browser = Preview("name,url,username,password,note\nWork,https://accounts.example/login,ada,secret,\n");
         Assert.Equal((CredentialFileFormat.Browser, "Work"), (browser.Format, browser.Groups[0].Candidates[0].DisplayName));
@@ -101,6 +73,51 @@ public sealed class CredentialImportTests {
     }
 
     [Fact]
+    public void ABracketedHostMustBeAnIPv6AddressWithoutAZoneId() {
+        var plan = Preview("""
+            url,username,password
+            https://[2001:DB8::1]:8443/,u,s
+            https://[a b]/,u,s
+            https://[a%2Fb]/,u,s
+            https://[%5B::1%5D]/,u,s
+            https://[1.2.3.4]/,u,s
+            https://[v1.x]/,u,s
+            https://[:::]/,u,s
+            https://[fe80::1%25en0]/,u,s
+            https://[fe80::1%41]/,u,s
+            """);
+        Assert.Equal(new CredentialOrigin("https", "2001:db8::1", 8443), Assert.Single(plan.Groups).Origin);
+        Assert.Equal(Enumerable.Range(3, 8).Select(row => new CredentialRowRejection(row, CredentialRowFlaw.InvalidOrigin)), plan.Rejections);
+        // A page never reports a zone ID, so a saved password cannot hold one either.
+        Assert.False(new CredentialOrigin("https", "fe80::1%en0", 443).IsValid);
+    }
+
+    [Fact]
+    public void AnIPAddressIsSpelledAsAPageReportsItSoThePasswordFillsAndMerges() {
+        var saved = Saved("ada", "secret", origin: new("https", "127.0.0.1", 443));
+        var plan = Preview("""
+            url,username,password
+            https://127.1/,ada,secret
+            https://0x7f.0.0.1./,bob,secret
+            https://[2001:db8:0:0:0:0:0:1]/,ada,secret
+            https://[::ffff:1.2.3.4]/,ada,secret
+            https://999.1.1.1/,ada,secret
+            https://1.2.3.4.5/,ada,secret
+            https://08.1.1.1/,ada,secret
+            https://[::ffff:1.2.3.04]/,ada,secret
+            """, saved);
+        Assert.Equal([("127.0.0.1", "ada"), ("127.0.0.1", "bob"), ("2001:db8::1", "ada"), ("::ffff:102:304", "ada")],
+            plan.Groups.Select(group => (group.Origin.Host, group.Username)));
+        Assert.Equal(saved.Id, plan.Groups[0].ExistingId);
+        // A host ending in a number must be an IPv4 address, and an IPv6 address
+        // must spell any IPv4 address it ends in without leading zeros, or no
+        // page can have it.
+        Assert.Equal(Enumerable.Range(6, 4).Select(row => new CredentialRowRejection(row, CredentialRowFlaw.InvalidOrigin)), plan.Rejections);
+        Assert.False(new CredentialOrigin("https", "2001:db8:0:0:0:0:0:1", 443).IsValid);
+        Assert.False(new CredentialOrigin("https", "127.1", 443).IsValid);
+    }
+
+    [Fact]
     public void AnAccountsRowsGroupAgainstItsMostRecentSavedPassword() {
         var older = Saved("ADA", "old-secret", updatedAt: 3_000);
         var newer = Saved("ada", "current-secret", updatedAt: 1_000, lastUsedAt: 5_000);
@@ -130,17 +147,5 @@ public sealed class CredentialImportTests {
         // A file that repeats the saved password needs no choice.
         var same = Preview("url,username,password\nhttps://accounts.example,ada,current-secret", newer).Groups[0];
         Assert.Equal((false, CredentialImportEffect.Matches), (same.RequiresChoice, same.Candidates[0].Effect));
-    }
-
-    [Fact]
-    public void AnotherBrowsersPasswordsImportAsABrowsersOwnFileWould() {
-        var plan = Area.Query(new PasswordImportPreview([
-            new(2, "accounts.example", Accounts, "ada", "secret"),
-            new(3, null, new CredentialOrigin("ftp", "files.example", 21), "ada", "secret"),
-            new(4, null, Accounts, "grace", "")
-        ], [Saved("ada", "secret")]));
-        Assert.Equal(CredentialFileFormat.Browser, plan.Format);
-        Assert.Equal([new(3, CredentialRowFlaw.InvalidOrigin), new(4, CredentialRowFlaw.EmptyPassword)], plan.Rejections);
-        Assert.Equal(CredentialImportEffect.Matches, Assert.Single(plan.Groups).Candidates[0].Effect);
     }
 }

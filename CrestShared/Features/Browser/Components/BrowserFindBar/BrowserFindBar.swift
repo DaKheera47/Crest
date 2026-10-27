@@ -96,11 +96,26 @@ struct BrowserFindBar: View {
     private var queryField: some View {
         TextField("Find in Page", text: queryBinding)
             .textFieldStyle(.plain)
-            .modifier(BrowserPlatformFindQueryInputModifier())
+            #if os(iOS)
+                // The query stays literal, and the return key reads as search.
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+            #endif
             .focused($focusedField, equals: .query)
             .frame(width: metrics.queryWidth)
             .onSubmit {
                 port.find(port.query(), .forward)
+            }
+            // `onSubmit` can't see modifiers, so Shift-Return steps back here
+            // before the field submits. Caps Lock doesn't change it, and other
+            // modifier combinations pass through.
+            .onKeyPress(.return, phases: .down) { press in
+                guard press.modifiers.intersection([.shift, .command, .option, .control]) == .shift else {
+                    return .ignored
+                }
+                port.find(port.query(), .backward)
+                return .handled
             }
             .accessibilityIdentifier("find-field")
     }

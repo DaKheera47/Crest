@@ -215,7 +215,6 @@ final class BrowserMacApplication {
                 )
             },
             tabStateArchive: tabStateArchive,
-            openNewTab: { url in browser.openNewTab(url: url) },
             openModifiedLink: { url, spaceID, selecting in
                 browser.openModifiedLink(url, in: spaceID, selecting: selecting)
             },
@@ -233,7 +232,6 @@ final class BrowserMacApplication {
             browsingMode: .privateBrowsing,
             permissionCenter: permissionCenter,
             passkeyAccess: passkeyAccess,
-            openNewTab: { url in privateBrowser.openNewTab(url: url) },
             openModifiedLink: { url, spaceID, selecting in
                 privateBrowser.openModifiedLink(url, in: spaceID, selecting: selecting)
             },
@@ -270,12 +268,13 @@ final class BrowserMacApplication {
         )
         self.transientBrowsing = transientBrowsing
         self.windowCoordinator = BrowserMacWindowCoordinator(
-            browser: browser, pages: pages, spaceAccess: spaceAccess, windowLayouts: windowLayouts)
+            browser: browser, pages: pages, spaceAccess: spaceAccess, windowLayouts: windowLayouts,
+            utilityDefaults: utilityDefaults)
         self.privateBrowser = privateBrowser
+        // A private window keeps nothing past its session, and its Space is
+        // new each time it opens, so its lists choice stays in memory.
         self.privateChrome = BrowserChromeState(
-            utilityPresentation: BrowserUtilityPresentationState(
-                defaults: utilityDefaults
-            )
+            utilityPresentation: BrowserUtilityPresentationState(defaults: nil)
         )
         self.privateTransientBrowsing = privateTransientBrowsing
         self.spaceAccess = spaceAccess
@@ -305,7 +304,9 @@ final class BrowserMacApplication {
         self.systemNowPlaying = systemNowPlaying
         self.startupBehavior = startupBehavior
         self.launchEnvironment = launchEnvironment.coreEnvironment
-        memoryPressure = usesIsolatedLaunch ? nil : BrowserMemoryPressureMonitor(core: core, pools: pagePoolRegistry)
+        memoryPressure =
+            usesIsolatedLaunch
+            ? nil : BrowserMemoryPressureMonitor(core: core) { [pagePoolRegistry] in pagePoolRegistry.livePools }
         browser.family.configureSpaceDataCleanup(pagePoolRegistry, from: browser)
         memoryPressure?.start()
     }
